@@ -18,7 +18,7 @@ import vsanmgmtObjects
 
 def get_args():  
     parser = argparse.ArgumentParser(
-        description='Get vSAN cluster statistics')
+        description='Export vSAN cluster performance and storage usage statistics to InfluxDB line protocol')
 
     parser.add_argument('-s', '--vcenter',
                         required=True,
@@ -46,11 +46,33 @@ def get_args():
                         required=True,
                         help='Cluster Name')
 
+    parser.add_argument("--performance",
+                        help="Output performance metrics",
+                        action="store_true")
+
+    parser.add_argument("--capacity",
+                        help="Output storage usage metrics",
+                        action="store_true")
+
+    parser.add_argument('--skipentitytypes',
+                    required=False,
+                    action='store',
+                    help='List of entity types to skip. Separated by a comma')
+
     args = parser.parse_args()
+
     if not args.password:
-        args. password = getpass.getpass(
+        args.password = getpass.getpass(
             prompt='Enter password for host %s and user %s: ' %
                    (args.vcenter, args.user))
+
+    if not args.performance and args.skipentitytypes:
+        print("You can't skip a performance entity type if you don't provide the --performance tag")
+        exit()
+
+    if not args.performance and not args.capacity:
+        print('Please provide tag(s) --performance and/or --capacity to specify what type of data you want to collect')
+        exit()
 
     return args
 
@@ -65,20 +87,22 @@ def getClusterInstance(clusterName, content):
    return None
 
 # Get hosts informations (hostname and disks)
-def getHostsInfos(hosts):
+def getHostsInfos(cluster):
     disksinfos = {}
+    hostnames = {}
     hostinfos = {}
 
-    for membershipList in hosts[0].runtime.vsanRuntimeInfo.membershipList:
-        hostinfos[membershipList.nodeUuid] = membershipList.hostname
-
-    for host in hosts:
+    for host in cluster.host:
+        hostnames[host.summary.host] = host.summary.config.name
 
         diskAll = host.configManager.vsanSystem.QueryDisksForVsan()
 
         for disk in diskAll:
             if disk.state == 'inUse':
                 disksinfos[disk.vsanUuid] = disk.disk.canonicalName
+
+    for vsanHostConfig in cluster.configurationEx.vsanHostConfig:
+        hostinfos[vsanHostConfig.clusterInfo.nodeUuid] = hostnames[vsanHostConfig.hostSystem]
 
     return disksinfos,hostinfos
 
@@ -306,98 +330,21 @@ def main():
     tagsbase['vcenter'] = args.vcenter
     tagsbase['cluster'] = args.clusterName
 
-    # Get VM uuid/names
-    vms = getVMs(content)
-
-
-    #for host in cluster_obj.host:
-     #   host.QueryHostStatus()
-
-
-    # Get disks uuid/names et hosts uuid/names
-    diskinfos, hostinfos = getHostsInfos(cluster_obj.host)
-
     apiVersion = vsanapiutils.GetLatestVmodlVersion(args.vcenter)
     vcMos = vsanapiutils.GetVsanVcMos(si._stub, context=context, version=apiVersion)
 
     ## CAPACITY
-    vsanSpaceReportSystem = vcMos['vsan-cluster-space-report-system']
 
-    try:
-        spaceReport = vsanSpaceReportSystem.VsanQuerySpaceUsage(
-            cluster = cluster_obj
-            )
-    except vmodl.fault.InvalidArgument as e:
-        print("Caught InvalidArgument exception : " + str(e))
-        return -1    
-    except vmodl.fault.NotSupported as e:
-        print("Caught NotSupported exception : " + str(e))
-        return -1
+    if args.capacity:
+        vsanSpaceReportSystem = vcMos['vsan-cluster-space-report-system']
 
-    except vmodl.fault.RuntimeFault as e:
-        print("Caught RuntimeFault exception : " + str(e))
-        return -1
-
-    timestamp = int(time.time() * 1000000000)
-
-    parseCapacity('global',spaceReport,tagsbase,timestamp)
-    parseCapacity('summary',spaceReport,tagsbase,timestamp)
-
-    if spaceReport.efficientCapacity:
-        parseCapacity('efficientcapacity',spaceReport,tagsbase,timestamp)
-
-    for object in spaceReport.spaceDetail.spaceUsageByObjectType:
-        parseCapacity(object.objType,object,tagsbase,timestamp)
-
-    ## PERFORMANCE
-    vsanPerfSystem =  vcMos['vsan-performance-manager']
-
-    # Gather a list of the available entity types (ex: vsan-host-net)
-    entityTypes = vsanPerfSystem.VsanPerfGetSupportedEntityTypes()
-
-    # query interval, last 10 minutes 
-    endTime = datetime.utcnow()
-    startTime = endTime + timedelta(minutes=-10)
-
-    for entities in entityTypes:
-
-        entitieName = entities.name
-
-        labels = []
-
-        # Gather all labels related to the entity (ex: iopsread, iopswrite...)
-        for entity in entities.graphs:
-
-            for metric in entity.metrics:
-
-                labels.append(metric.label)
-
-        # Build entity 
-        entity = '%s:*' % (entities.name)
-
-        # Build spec object
-        spec = vim.cluster.VsanPerfQuerySpec(
-            endTime = endTime,
-            entityRefId = entity,
-            labels = labels,
-            startTime = startTime
-        )
-
-        # Get statistics
         try:
-            metrics = vsanPerfSystem.VsanPerfQueryPerf(
-                querySpecs = [spec],
+            spaceReport = vsanSpaceReportSystem.VsanQuerySpaceUsage(
                 cluster = cluster_obj
-            )
-
+                )
         except vmodl.fault.InvalidArgument as e:
             print("Caught InvalidArgument exception : " + str(e))
-            return -1
-
-        except vmodl.fault.NotFound as e:
-            print("Caught NotFound exception : " + str(e))
-            return -1
-
+            return -1    
         except vmodl.fault.NotSupported as e:
             print("Caught NotSupported exception : " + str(e))
             return -1
@@ -406,38 +353,121 @@ def main():
             print("Caught RuntimeFault exception : " + str(e))
             return -1
 
-        except vmodl.fault.Timedout as e:
-            print("Caught Timedout exception : " + str(e))
-            return -1
+        timestamp = int(time.time() * 1000000000)
 
-        except vmodl.fault.VsanNodeNotMaster as e:
-            print("Caught VsanNodeNotMaster exception : " + str(e))
-            return -1
+        parseCapacity('global',spaceReport,tagsbase,timestamp)
+        parseCapacity('summary',spaceReport,tagsbase,timestamp)
 
-        for metric in metrics:
+        if spaceReport.efficientCapacity:
+            parseCapacity('efficientcapacity',spaceReport,tagsbase,timestamp)
 
-            if not metric.sampleInfo == "":
+        for object in spaceReport.spaceDetail.spaceUsageByObjectType:
+            parseCapacity(object.objType,object,tagsbase,timestamp)
 
-                measurement = entitieName    
+    ## PERFORMANCE
+    if args.performance:
 
-                sampleInfos = metric.sampleInfo.split(",")
-                lenValues = len(sampleInfos)
+        # Get VM uuid/names
+        vms = getVMs(content)
 
-                timestamp = convertStrToTimestamp(sampleInfos[lenValues - 1])
+        # Get disks uuid/names et hosts uuid/names
+        diskinfos, hostinfos = getHostsInfos(cluster_obj)
 
-                tags = parseEntityRefId(measurement,metric.entityRefId,hostinfos,vms,diskinfos)
+        vsanPerfSystem =  vcMos['vsan-performance-manager']
 
-                tags.update(tagsbase)
+        # Gather a list of the available entity types (ex: vsan-host-net)
+        entityTypes = vsanPerfSystem.VsanPerfGetSupportedEntityTypes()
 
-                fields = {}
+        # query interval, last 10 minutes 
+        endTime = datetime.utcnow()
+        startTime = endTime + timedelta(minutes=-10)
 
-                for value in metric.value:
+        splitSkipentitytypes = []
 
-                    listValue = value.values.split(",")
+        if args.skipentitytypes:
+                splitSkipentitytypes = args.skipentitytypes.split(',')
 
-                    fields[value.metricId.label] = float(listValue[lenValues - 1])
+        for entities in entityTypes:
 
-                printInfluxLineProtocol(measurement,tags,fields,timestamp) 
+            if entities.name not in splitSkipentitytypes:
+                   
+                entitieName = entities.name
+
+                labels = []
+
+                # Gather all labels related to the entity (ex: iopsread, iopswrite...)
+                for entity in entities.graphs:
+
+                    for metric in entity.metrics:
+
+                            labels.append(metric.label)
+
+                # Build entity 
+                entity = '%s:*' % (entities.name)
+
+                # Build spec object
+                spec = vim.cluster.VsanPerfQuerySpec(
+                    endTime = endTime,
+                    entityRefId = entity,
+                    labels = labels,
+                    startTime = startTime
+                )
+
+                # Get statistics
+                try:
+                    metrics = vsanPerfSystem.VsanPerfQueryPerf(
+                        querySpecs = [spec],
+                        cluster = cluster_obj
+                    )
+
+                except vmodl.fault.InvalidArgument as e:
+                    print("Caught InvalidArgument exception : " + str(e))
+                    return -1
+
+                except vmodl.fault.NotFound as e:
+                    print("Caught NotFound exception : " + str(e))
+                    return -1
+
+                except vmodl.fault.NotSupported as e:
+                    print("Caught NotSupported exception : " + str(e))
+                    return -1
+
+                except vmodl.fault.RuntimeFault as e:
+                    print("Caught RuntimeFault exception : " + str(e))
+                    return -1
+
+                except vmodl.fault.Timedout as e:
+                    print("Caught Timedout exception : " + str(e))
+                    return -1
+
+                except vmodl.fault.VsanNodeNotMaster as e:
+                    print("Caught VsanNodeNotMaster exception : " + str(e))
+                    return -1
+
+                for metric in metrics:
+
+                    if not metric.sampleInfo == "":
+
+                        measurement = entitieName    
+
+                        sampleInfos = metric.sampleInfo.split(",")
+                        lenValues = len(sampleInfos)
+
+                        timestamp = convertStrToTimestamp(sampleInfos[lenValues - 1])
+
+                        tags = parseEntityRefId(measurement,metric.entityRefId,hostinfos,vms,diskinfos)
+
+                        tags.update(tagsbase)
+
+                        fields = {}
+
+                        for value in metric.value:
+
+                            listValue = value.values.split(",")
+
+                            fields[value.metricId.label] = float(listValue[lenValues - 1])
+
+                        printInfluxLineProtocol(measurement,tags,fields,timestamp) 
 
     return 0
 
