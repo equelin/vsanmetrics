@@ -124,6 +124,7 @@ If needed, you can specify more than one input plugin. It might be useful if you
   data_format = "influx"
 
   interval = "300s"
+```
 
 # Author
 **Erwan Quélin**
