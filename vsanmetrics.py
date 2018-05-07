@@ -322,7 +322,7 @@ def main():
     
     # Exit if the cluster provided in the arguments is not available
     if not cluster_obj:
-        print 'The required cluster not found in inventory, validate input. Aborting test'
+        print 'The required cluster not found in inventory, validate input.'
         exit()
 
     # Initiate tags with vcenter and cluster name
@@ -372,6 +372,24 @@ def main():
 
         # Get disks uuid/names et hosts uuid/names
         diskinfos, hostinfos = getHostsInfos(cluster_obj)
+
+        #### Witness
+        vsanVcStretchedClusterSystem = vcMos['vsan-stretched-cluster-system']
+
+        # Retrieve Witness Host for given VSAN Cluster
+        witnessHosts = vsanVcStretchedClusterSystem.VSANVcGetWitnessHosts(
+            cluster=cluster_obj
+            )
+
+        for witnessHost in witnessHosts:
+            host = (vim.HostSystem(witnessHost.host._moId,si._stub))
+            hostinfos[witnessHost.nodeUuid] = host.name
+
+            diskWitness = host.configManager.vsanSystem.QueryDisksForVsan()
+
+            for disk in diskWitness:
+                if disk.state == 'inUse':
+                    diskinfos[disk.vsanUuid] = disk.disk.canonicalName
 
         vsanPerfSystem =  vcMos['vsan-performance-manager']
 
