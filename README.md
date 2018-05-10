@@ -2,7 +2,7 @@
 
 vsanmetrics is a tool written in Python for collecting usage and performance metrics from a VMware vSAN cluster and translating them in [InfluxDB's line protocol](https://github.com/influxdata/telegraf/blob/master/docs/DATA_FORMATS_INPUT.md).
 
-It can be useful to send metrics in a [InfluxDB](https://www.influxdata.com/) database with the help of [Telegraf](https://www.influxdata.com/time-series-platform/telegraf/) and then display metrics in [Grafana](https://grafana.com/).
+It can be useful to send metrics in a time-serie database like [InfluxDB](https://www.influxdata.com/) or [Graphite](https://graphiteapp.org/) with the help of [Telegraf](https://www.influxdata.com/time-series-platform/telegraf/) and then display metrics in [Grafana](https://grafana.com/).
 
 A detailed list of all entities types and metrics is available [here](entities.md)
 
@@ -118,9 +118,9 @@ A more detailed list of entities and metrics is available [here](entities.md)
 
 The `exec` input plugin of Telegraf executes the `commands` on every interval and parses metrics from their output in any one of the accepted [Input Data Formats](https://github.com/influxdata/telegraf/blob/master/docs/DATA_FORMATS_INPUT.md).
 
-> Don't forget to configure Telegraf to output data to InfluxDB !
+> Don't forget to configure Telegraf to output data to a [time series database](https://docs.influxdata.com/telegraf/v1.6/concepts/data_formats_output/) !
 
-`vsanmetrics` output the metrics in InfluxDB's line protocol. Telegraf will parse them and send them to the InfluxDB database.
+`vsanmetrics` output the metrics in InfluxDB's line protocol. Telegraf will parse them and send them to any data format configured in the [outputs plugins](https://docs.influxdata.com/telegraf/v1.6/plugins/outputs/).
 
 `vsanmetrics` and `pyvmomi` should be available by the user who run the Telegraf service. (typically root on Linux boxes...).
 
