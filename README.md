@@ -9,9 +9,9 @@ A detailed list of all entities types and metrics is available [here](entities.m
 ## Prerequisites
 
 - Python (This script has been tested with python 2.7.12)
-- [Pyvmomi](https://github.com/vmware/pyvmomi#installing)
+- [Pyvmomi](https://github.com/vmware/pyvmomi#installing) and `pytz` python's librairies
 
-> You can install pyvmomi with pip -> `pip install pyvmomi`
+> You can install the librairies with pip -> `pip install -r requirements.txt`
 
 - [VMware vSAN Management SDK for python](https://code.vmware.com/web/sdk/6.7.0/vsan-python)
 
@@ -122,9 +122,9 @@ The `exec` input plugin of Telegraf executes the `commands` on every interval an
 
 `vsanmetrics` output the metrics in InfluxDB's line protocol. Telegraf will parse them and send them to the InfluxDB database.
 
-`vsanmetrics` and `pyvmomi` should be available by the user who run the Telegraf service. (typically root on Linux boxes...).
+`vsanmetrics` and and the Python's librairies should be available by the user who run the Telegraf service. (typically root on Linux boxes...).
 
-> TIP: On Linux, install pyvmomi with the command `sudo -H pip install pyvmomi` to make it available to the root user. 
+> TIP: On Linux, install the librairies with the command `sudo -H pip install -r requirements.txt` to make it available to the root user.
 
 Here is an example of a working telegraf's config file:
 

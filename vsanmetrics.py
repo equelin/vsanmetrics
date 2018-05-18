@@ -9,6 +9,7 @@ import argparse
 import atexit
 import getpass
 from datetime import datetime, timedelta
+from pytz import timezone
 import time
 import ssl
 
@@ -59,6 +60,11 @@ def get_args():
                     action='store',
                     help='List of entity types to skip. Separated by a comma')
 
+    parser.add_argument('-t', '--timezone',
+                    required=False,
+                    action='store',
+                    help='Name of the timezone to convert to (ex:Europe/Paris')
+
     args = parser.parse_args()
 
     if not args.password:
@@ -85,6 +91,33 @@ def getClusterInstance(clusterName, content):
       if cluster is not None:
          return cluster
    return None
+
+def getUuid(witnessHosts, cluster):
+
+    uuid = {}
+    hostnames = {}
+
+    ### Get Host and disks informations
+    for host in cluster.host:
+
+        #Get relationship between host id and hostname 
+        hostnames[host.summary.host] = host.summary.config.name
+
+        #Get all disk (cache and capcity) attached to hosts in the cluster
+        diskAll = host.configManager.vsanSystem.QueryDisksForVsan()
+
+        for disk in diskAll:
+            if disk.state == 'inUse':
+                uuid[disk.vsanUuid] = disk.disk.canonicalName
+
+    for vsanHostConfig in cluster.configurationEx.vsanHostConfig:
+        uuid[vsanHostConfig.clusterInfo.nodeUuid] = hostnames[vsanHostConfig.hostSystem]
+
+    ### Get witness disks informations
+
+
+
+    return uuid
 
 # Get hosts informations (hostname and disks)
 def getHostsInfos(cluster):
@@ -128,15 +161,32 @@ def printInfluxLineProtocol(measurement,tags,fields,timestamp):
     print(result)
 
 # Convert time in string format to epoch timestamp (nanosecond)
-def convertStrToTimestamp(str):
-    sec = time.mktime(datetime.strptime(str, "%Y-%m-%d %H:%M:%S").timetuple())
+def convertStrToTimestamp(str, tz):
+
+    # Create a UTC timezone object
+    utctz = timezone('UTC')
+
+    #Convert string to naive datetime
+    strTime = datetime.strptime(str, "%Y-%m-%d %H:%M:%S")
+
+    #Add UTC timezone to object
+    strTime = strTime.replace(tzinfo=utctz)
+
+    if tz:
+
+        # Create a timezone object with the timezone specified as a parameter
+        localtz = timezone(tz)
+        # Set the new timezone
+        strTime = strTime.astimezone(localtz)
+
+    sec = time.mktime(strTime.timetuple())
 
     ns = int(sec * 1000000000)
 
     return ns
 
 # parse EntytyRefID, convert to tags
-def parseEntityRefId(measurement,entityRefId,hosts,vms,disks):
+def parseEntityRefId(measurement,entityRefId,uuid,vms):
 
     tags = {}
 
@@ -158,19 +208,19 @@ def parseEntityRefId(measurement,entityRefId,hosts,vms,disks):
 
         if measurement == 'host-domclient':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'host-domcompmgr':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'cache-disk':
             tags['uuid'] = entityRefId[1]
-            tags['naa'] = disks[entityRefId[1]]
+            tags['naa'] = uuid[entityRefId[1]]
 
         if measurement == 'capacity-disk':
             tags['uuid'] = entityRefId[1]
-            tags['naa'] = disks[entityRefId[1]]
+            tags['naa'] = uuid[entityRefId[1]]
 
         if measurement == 'disk-group':
             tags['uuid'] = entityRefId[1]
@@ -189,33 +239,33 @@ def parseEntityRefId(measurement,entityRefId,hosts,vms,disks):
             split = entityRefId[1].split("|")     
 
             tags['uuid'] = split[0]
-            tags['hostname'] = hosts[split[0]] 
+            tags['hostname'] = uuid[split[0]] 
             tags['stack'] = split[1]
             tags['vmk'] = split[2]
 
         if measurement == 'vsan-host-net':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'vsan-pnic-net':
 
             split = entityRefId[1].split("|")     
 
             tags['uuid'] = split[0]
-            tags['hostname'] = hosts[split[0]] 
+            tags['hostname'] = uuid[split[0]] 
             tags['vmnic'] = split[1]
 
         if measurement == 'vsan-iscsi-host':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'vsan-iscsi-target':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'vsan-iscsi-lun':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
     return tags
 
@@ -367,15 +417,16 @@ def main():
     ## PERFORMANCE
     if args.performance:
 
+        vsanVcStretchedClusterSystem = vcMos['vsan-stretched-cluster-system']
+        vsanPerfSystem =  vcMos['vsan-performance-manager']
+
         # Get VM uuid/names
         vms = getVMs(content)
 
-        # Get disks uuid/names et hosts uuid/names
-        diskinfos, hostinfos = getHostsInfos(cluster_obj)
+        # Get uuid/names relationship informations for hosts and disks
+        uuid = getUuid(content, cluster_obj)
 
         #### Witness
-        vsanVcStretchedClusterSystem = vcMos['vsan-stretched-cluster-system']
-
         # Retrieve Witness Host for given VSAN Cluster
         witnessHosts = vsanVcStretchedClusterSystem.VSANVcGetWitnessHosts(
             cluster=cluster_obj
@@ -383,20 +434,20 @@ def main():
 
         for witnessHost in witnessHosts:
             host = (vim.HostSystem(witnessHost.host._moId,si._stub))
-            hostinfos[witnessHost.nodeUuid] = host.name
+
+            uuid[witnessHost.nodeUuid] = host.name
 
             diskWitness = host.configManager.vsanSystem.QueryDisksForVsan()
 
             for disk in diskWitness:
                 if disk.state == 'inUse':
-                    diskinfos[disk.vsanUuid] = disk.disk.canonicalName
+                    uuid[disk.vsanUuid] = disk.disk.canonicalName
 
-        vsanPerfSystem =  vcMos['vsan-performance-manager']
 
         # Gather a list of the available entity types (ex: vsan-host-net)
         entityTypes = vsanPerfSystem.VsanPerfGetSupportedEntityTypes()
 
-        # query interval, last 10 minutes 
+        # query interval, last 10 minutes -- UTC !!! 
         endTime = datetime.utcnow()
         startTime = endTime + timedelta(minutes=-10)
 
@@ -471,9 +522,9 @@ def main():
                         sampleInfos = metric.sampleInfo.split(",")
                         lenValues = len(sampleInfos)
 
-                        timestamp = convertStrToTimestamp(sampleInfos[lenValues - 1])
+                        timestamp = convertStrToTimestamp(sampleInfos[lenValues - 1],args.timezone)
 
-                        tags = parseEntityRefId(measurement,metric.entityRefId,hostinfos,vms,diskinfos)
+                        tags = parseEntityRefId(measurement,metric.entityRefId,uuid,vms)
 
                         tags.update(tagsbase)
 
