@@ -9,7 +9,6 @@ import argparse
 import atexit
 import getpass
 from datetime import datetime, timedelta
-from pytz import timezone
 import time
 import ssl
 
@@ -59,11 +58,6 @@ def get_args():
                     required=False,
                     action='store',
                     help='List of entity types to skip. Separated by a comma')
-
-    parser.add_argument('-t', '--timezone',
-                    required=False,
-                    action='store',
-                    help='Name of the timezone to convert to (ex:Europe/Paris')
 
     args = parser.parse_args()
 
@@ -163,25 +157,8 @@ def printInfluxLineProtocol(measurement,tags,fields,timestamp):
     print(result)
 
 # Convert time in string format to epoch timestamp (nanosecond)
-def convertStrToTimestamp(str, tz):
-
-    # Create a UTC timezone object
-    utctz = timezone('UTC')
-
-    #Convert string to naive datetime
-    strTime = datetime.strptime(str, "%Y-%m-%d %H:%M:%S")
-
-    #Add UTC timezone to object
-    strTime = strTime.replace(tzinfo=utctz)
-
-    if tz:
-
-        # Create a timezone object with the timezone specified as a parameter
-        localtz = timezone(tz)
-        # Set the new timezone
-        strTime = strTime.astimezone(localtz)
-
-    sec = time.mktime(strTime.timetuple())
+def convertStrToTimestamp(str):
+    sec = time.mktime(datetime.strptime(str, "%Y-%m-%d %H:%M:%S").timetuple())
 
     ns = int(sec * 1000000000)
 
@@ -527,7 +504,7 @@ def main():
                         sampleInfos = metric.sampleInfo.split(",")
                         lenValues = len(sampleInfos)
 
-                        timestamp = convertStrToTimestamp(sampleInfos[lenValues - 1],args.timezone)
+                        timestamp = convertStrToTimestamp(sampleInfos[lenValues - 1])
 
                         tags = parseEntityRefId(measurement,metric.entityRefId,uuid,vms,disks)
 

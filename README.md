@@ -9,7 +9,7 @@ A detailed list of all entities types and metrics is available [here](entities.m
 ## Prerequisites
 
 - Python (This script has been tested with python 2.7.12)
-- [Pyvmomi](https://github.com/vmware/pyvmomi#installing) and `pytz` python's librairies
+- [Pyvmomi](https://github.com/vmware/pyvmomi#installing) python's librairy
 
 > You can install the librairies with pip -> `pip install -r requirements.txt`
 
