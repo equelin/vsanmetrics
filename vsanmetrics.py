@@ -86,6 +86,35 @@ def getClusterInstance(clusterName, content):
          return cluster
    return None
 
+def getInformations(witnessHosts, cluster):
+
+    uuid = {}
+    hostnames = {}
+    disks = {}
+
+    ### Get Host and disks informations
+    for host in cluster.host:
+
+        #Get relationship between host id and hostname 
+        hostnames[host.summary.host] = host.summary.config.name
+
+        #Get all disk (cache and capcity) attached to hosts in the cluster
+        diskAll = host.configManager.vsanSystem.QueryDisksForVsan()
+
+        for disk in diskAll:
+            if disk.state == 'inUse':
+                uuid[disk.vsanUuid] = disk.disk.canonicalName
+                disks[disk.vsanUuid] = host.summary.config.name
+
+    for vsanHostConfig in cluster.configurationEx.vsanHostConfig:
+        uuid[vsanHostConfig.clusterInfo.nodeUuid] = hostnames[vsanHostConfig.hostSystem]
+
+    ### Get witness disks informations
+
+
+
+    return uuid , disks
+
 # Get hosts informations (hostname and disks)
 def getHostsInfos(cluster):
     disksinfos = {}
@@ -136,7 +165,7 @@ def convertStrToTimestamp(str):
     return ns
 
 # parse EntytyRefID, convert to tags
-def parseEntityRefId(measurement,entityRefId,hosts,vms,disks):
+def parseEntityRefId(measurement,entityRefId,uuid,vms,disks):
 
     tags = {}
 
@@ -158,19 +187,21 @@ def parseEntityRefId(measurement,entityRefId,hosts,vms,disks):
 
         if measurement == 'host-domclient':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'host-domcompmgr':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'cache-disk':
             tags['uuid'] = entityRefId[1]
-            tags['naa'] = disks[entityRefId[1]]
+            tags['naa'] = uuid[entityRefId[1]]
+            tags['hostname'] = disks[entityRefId[1]]
 
         if measurement == 'capacity-disk':
             tags['uuid'] = entityRefId[1]
-            tags['naa'] = disks[entityRefId[1]]
+            tags['naa'] = uuid[entityRefId[1]]
+            tags['hostname'] = disks[entityRefId[1]]
 
         if measurement == 'disk-group':
             tags['uuid'] = entityRefId[1]
@@ -189,33 +220,33 @@ def parseEntityRefId(measurement,entityRefId,hosts,vms,disks):
             split = entityRefId[1].split("|")     
 
             tags['uuid'] = split[0]
-            tags['hostname'] = hosts[split[0]] 
+            tags['hostname'] = uuid[split[0]] 
             tags['stack'] = split[1]
             tags['vmk'] = split[2]
 
         if measurement == 'vsan-host-net':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'vsan-pnic-net':
 
             split = entityRefId[1].split("|")     
 
             tags['uuid'] = split[0]
-            tags['hostname'] = hosts[split[0]] 
+            tags['hostname'] = uuid[split[0]] 
             tags['vmnic'] = split[1]
 
         if measurement == 'vsan-iscsi-host':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'vsan-iscsi-target':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
         if measurement == 'vsan-iscsi-lun':
             tags['uuid'] = entityRefId[1]
-            tags['hostname'] = hosts[entityRefId[1]] 
+            tags['hostname'] = uuid[entityRefId[1]] 
 
     return tags
 
@@ -256,6 +287,7 @@ def parseVimVsanDataEfficiencyCapacityState(data):
     fields['logicalCapacityUsed'] = data.logicalCapacityUsed
     fields['physicalCapacity'] = data.physicalCapacity
     fields['physicalCapacityUsed'] = data.physicalCapacityUsed
+    fields['ratio'] = float(data.logicalCapacityUsed) / float(data.physicalCapacityUsed)
 
     return fields    
 
@@ -367,15 +399,16 @@ def main():
     ## PERFORMANCE
     if args.performance:
 
+        vsanVcStretchedClusterSystem = vcMos['vsan-stretched-cluster-system']
+        vsanPerfSystem =  vcMos['vsan-performance-manager']
+
         # Get VM uuid/names
         vms = getVMs(content)
 
-        # Get disks uuid/names et hosts uuid/names
-        diskinfos, hostinfos = getHostsInfos(cluster_obj)
+        # Get uuid/names relationship informations for hosts and disks
+        uuid, disks = getInformations(content, cluster_obj)
 
         #### Witness
-        vsanVcStretchedClusterSystem = vcMos['vsan-stretched-cluster-system']
-
         # Retrieve Witness Host for given VSAN Cluster
         witnessHosts = vsanVcStretchedClusterSystem.VSANVcGetWitnessHosts(
             cluster=cluster_obj
@@ -383,20 +416,20 @@ def main():
 
         for witnessHost in witnessHosts:
             host = (vim.HostSystem(witnessHost.host._moId,si._stub))
-            hostinfos[witnessHost.nodeUuid] = host.name
+
+            uuid[witnessHost.nodeUuid] = host.name
 
             diskWitness = host.configManager.vsanSystem.QueryDisksForVsan()
 
             for disk in diskWitness:
                 if disk.state == 'inUse':
-                    diskinfos[disk.vsanUuid] = disk.disk.canonicalName
+                    uuid[disk.vsanUuid] = disk.disk.canonicalName
 
-        vsanPerfSystem =  vcMos['vsan-performance-manager']
 
         # Gather a list of the available entity types (ex: vsan-host-net)
         entityTypes = vsanPerfSystem.VsanPerfGetSupportedEntityTypes()
 
-        # query interval, last 10 minutes 
+        # query interval, last 10 minutes -- UTC !!! 
         endTime = datetime.utcnow()
         startTime = endTime + timedelta(minutes=-10)
 
@@ -473,7 +506,7 @@ def main():
 
                         timestamp = convertStrToTimestamp(sampleInfos[lenValues - 1])
 
-                        tags = parseEntityRefId(measurement,metric.entityRefId,hostinfos,vms,diskinfos)
+                        tags = parseEntityRefId(measurement,metric.entityRefId,uuid,vms,disks)
 
                         tags.update(tagsbase)
 
