@@ -92,10 +92,11 @@ def getClusterInstance(clusterName, content):
          return cluster
    return None
 
-def getUuid(witnessHosts, cluster):
+def getInformations(witnessHosts, cluster):
 
     uuid = {}
     hostnames = {}
+    disks = {}
 
     ### Get Host and disks informations
     for host in cluster.host:
@@ -109,6 +110,7 @@ def getUuid(witnessHosts, cluster):
         for disk in diskAll:
             if disk.state == 'inUse':
                 uuid[disk.vsanUuid] = disk.disk.canonicalName
+                disks[disk.vsanUuid] = host.summary.config.name
 
     for vsanHostConfig in cluster.configurationEx.vsanHostConfig:
         uuid[vsanHostConfig.clusterInfo.nodeUuid] = hostnames[vsanHostConfig.hostSystem]
@@ -117,7 +119,7 @@ def getUuid(witnessHosts, cluster):
 
 
 
-    return uuid
+    return uuid , disks
 
 # Get hosts informations (hostname and disks)
 def getHostsInfos(cluster):
@@ -186,7 +188,7 @@ def convertStrToTimestamp(str, tz):
     return ns
 
 # parse EntytyRefID, convert to tags
-def parseEntityRefId(measurement,entityRefId,uuid,vms):
+def parseEntityRefId(measurement,entityRefId,uuid,vms,disks):
 
     tags = {}
 
@@ -217,10 +219,12 @@ def parseEntityRefId(measurement,entityRefId,uuid,vms):
         if measurement == 'cache-disk':
             tags['uuid'] = entityRefId[1]
             tags['naa'] = uuid[entityRefId[1]]
+            tags['hostname'] = disks[entityRefId[1]]
 
         if measurement == 'capacity-disk':
             tags['uuid'] = entityRefId[1]
             tags['naa'] = uuid[entityRefId[1]]
+            tags['hostname'] = disks[entityRefId[1]]
 
         if measurement == 'disk-group':
             tags['uuid'] = entityRefId[1]
@@ -306,6 +310,7 @@ def parseVimVsanDataEfficiencyCapacityState(data):
     fields['logicalCapacityUsed'] = data.logicalCapacityUsed
     fields['physicalCapacity'] = data.physicalCapacity
     fields['physicalCapacityUsed'] = data.physicalCapacityUsed
+    fields['ratio'] = float(data.logicalCapacityUsed) / float(data.physicalCapacityUsed)
 
     return fields    
 
@@ -424,7 +429,7 @@ def main():
         vms = getVMs(content)
 
         # Get uuid/names relationship informations for hosts and disks
-        uuid = getUuid(content, cluster_obj)
+        uuid, disks = getInformations(content, cluster_obj)
 
         #### Witness
         # Retrieve Witness Host for given VSAN Cluster
@@ -524,7 +529,7 @@ def main():
 
                         timestamp = convertStrToTimestamp(sampleInfos[lenValues - 1],args.timezone)
 
-                        tags = parseEntityRefId(measurement,metric.entityRefId,uuid,vms)
+                        tags = parseEntityRefId(measurement,metric.entityRefId,uuid,vms,disks)
 
                         tags.update(tagsbase)
 
