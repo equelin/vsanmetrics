@@ -424,7 +424,7 @@ def main():
             for disk in diskWitness:
                 if disk.state == 'inUse':
                     uuid[disk.vsanUuid] = disk.disk.canonicalName
-
+                    disks[disk.vsanUuid] = host.name
 
         # Gather a list of the available entity types (ex: vsan-host-net)
         entityTypes = vsanPerfSystem.VsanPerfGetSupportedEntityTypes()
