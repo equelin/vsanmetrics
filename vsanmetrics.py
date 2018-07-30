@@ -135,23 +135,19 @@ def getHostsInfos(cluster):
 
     return disksinfos,hostinfos
 
-# Get all VM managed by vCenter, return array with name and uuid of the VMs
-def getVMs(content):
-    container = content.rootFolder  # starting point to look into
-    viewType = [vim.VirtualMachine]  # object types to look for
-    recursive = True  # whether we should look into it recursively
-    containerView = content.viewManager.CreateContainerView(container, viewType, recursive)
-
-    children = containerView.view
-
+# Get all VM managed by the hosts in the cluster, return array with name and uuid of the VMs
+#SOurce: https://github.com/vmware/pyvmomi-community-samples/blob/master/samples/getvmsbycluster.py
+def getVMs(cluster):
+    
     vms = {}
-
-    for child in children:
-        vms[child.summary.config.instanceUuid] = child.summary.config.name
+    
+    for host in cluster.host:  # Iterate through Hosts in the Cluster            
+        for vm in host.vm:  # Iterate through each VM on the host
+            vms[vm.summary.config.instanceUuid] = vm.summary.config.name
 
     return vms
 
-# OUtput data in the Influx Line protocol format
+# Output data in the Influx Line protocol format
 def printInfluxLineProtocol(measurement,tags,fields,timestamp):
     result = "%s,%s %s %i" % (measurement,arrayToString(tags),arrayToString(fields),timestamp)
     print(result)
@@ -403,7 +399,7 @@ def main():
         vsanPerfSystem =  vcMos['vsan-performance-manager']
 
         # Get VM uuid/names
-        vms = getVMs(content)
+        vms = getVMs(cluster_obj)
 
         # Get uuid/names relationship informations for hosts and disks
         uuid, disks = getInformations(content, cluster_obj)
