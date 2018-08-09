@@ -1,6 +1,6 @@
 # vsanmetrics
 
-vsanmetrics is a tool written in Python for collecting usage and performance metrics from a VMware vSAN cluster and translating them in [InfluxDB's line protocol](https://github.com/influxdata/telegraf/blob/master/docs/DATA_FORMATS_INPUT.md).
+vsanmetrics is a tool written in Python for collecting usage and performance metrics and health status from a VMware vSAN cluster and translating them in [InfluxDB's line protocol](https://github.com/influxdata/telegraf/blob/master/docs/DATA_FORMATS_INPUT.md).
 
 It can be useful to send metrics in a time-serie database like [InfluxDB](https://www.influxdata.com/) or [Graphite](https://graphiteapp.org/) with the help of [Telegraf](https://www.influxdata.com/time-series-platform/telegraf/) and then display metrics in [Grafana](https://grafana.com/).
 
@@ -32,7 +32,7 @@ A detailed list of all entities types and metrics is available [here](entities.m
 % ./vsanmetrics -h
 
 usage: vsanmetrics.py [-h] -s VCENTER [-o PORT] -u USER [-p PASSWORD] -c
-                      CLUSTERNAME [--performance] [--capacity]
+                      CLUSTERNAME [--performance] [--capacity] [--health]
                       [--skipentitytypes SKIPENTITYTYPES]
 
 Export vSAN cluster performance and storage usage statistics to InfluxDB line
@@ -50,6 +50,7 @@ optional arguments:
                         Cluster Name
   --performance         Output performance metrics
   --capacity            Output storage usage metrics
+  --health              Output cluster health status
   --skipentitytypes SKIPENTITYTYPES
                         List of entity types to skip. Separated by a comma
 ```
@@ -136,7 +137,7 @@ Here is an example of a working telegraf's config file:
 [[inputs.exec]]
   # Shell/commands array
   # Full command line to executable with parameters, or a glob pattern to run all matching files.
-  commands = ["/path/to/script/vsanmetrics.py -s vcenter01.example.com -u administrator@vsphere.local -p MyAwesomePassword -c VSAN-CLUSTER --performance --capacity"]
+  commands = ["/path/to/script/vsanmetrics.py -s vcenter01.example.com -u administrator@vsphere.local -p MyAwesomePassword -c VSAN-CLUSTER --performance --capacity --health"]
 
   # Timeout for each command to complete.
   timeout = "60s"
@@ -158,7 +159,7 @@ If needed, you can specify more than one input plugin. It might be useful if you
 [[inputs.exec]]
   # Shell/commands array
   # Full command line to executable with parameters, or a glob pattern to run all matching files.
-  commands = ["/path/to/script/vsanmetrics.py -s vcenter01.example.com -u administrator@vsphere.local -p MyAwesomePassword -c VSAN-CLUSTER --performance --capacity"]
+  commands = ["/path/to/script/vsanmetrics.py -s vcenter01.example.com -u administrator@vsphere.local -p MyAwesomePassword -c VSAN-CLUSTER --performance --capacity --health"]
 
   # Timeout for each command to complete.
   timeout = "60s"
@@ -172,7 +173,7 @@ If needed, you can specify more than one input plugin. It might be useful if you
 [[inputs.exec]]
   # Shell/commands array
   # Full command line to executable with parameters, or a glob pattern to run all matching files.
-  commands = ["/path/to/script/vsanmetrics.py -s vcenter02.example.com -u administrator@vsphere.local -p MyAwesomePassword -c VSAN-CLUSTER --performance --capacity"]
+  commands = ["/path/to/script/vsanmetrics.py -s vcenter02.example.com -u administrator@vsphere.local -p MyAwesomePassword -c VSAN-CLUSTER --performance --capacity --health"]
 
   # Timeout for each command to complete.
   timeout = "60s"
@@ -185,6 +186,7 @@ If needed, you can specify more than one input plugin. It might be useful if you
 ```
 
 # Author
+
 **Erwan Quélin**
 - <https://github.com/equelin>
 - <https://twitter.com/erwanquelin>
