@@ -162,6 +162,12 @@ def printInfluxLineProtocol(measurement, tags, fields, timestamp):
     print(result)
 
 
+# Output data in the Influx Line protocol format
+def formatInfluxLineProtocol(measurement, tags, fields, timestamp):
+    result = "%s,%s %s %i \n" % (measurement, arrayToString(tags), arrayToString(fields), timestamp)
+    return result
+
+
 # Convert time in string format to epoch timestamp (nanosecond)
 def convertStrToTimestamp(str):
     sec = time.mktime(datetime.strptime(str, "%Y-%m-%d %H:%M:%S").timetuple())
@@ -428,6 +434,8 @@ def getHealth(args, tagsbase):
 
 def getPerformance(args, tagsbase):
 
+    result = ""
+
     # Don't check for valid certificate
     context = ssl._create_unverified_context()
 
@@ -558,7 +566,9 @@ def getPerformance(args, tagsbase):
 
                         fields[value.metricId.label] = float(listValue[lenValues - 1])
 
-                    printInfluxLineProtocol(measurement, tags, fields, timestamp)
+                    result = result + formatInfluxLineProtocol(measurement, tags, fields, timestamp)
+
+    print(result)
 
 
 def connectvCenter(args, context):
