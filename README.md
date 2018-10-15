@@ -53,6 +53,9 @@ optional arguments:
   --health              Output cluster health status
   --skipentitytypes SKIPENTITYTYPES
                         List of entity types to skip. Separated by a comma
+  --cachefolder CACHEFOLDER
+                        Folder where the cache files are stored
+  --cacheTTL CACHETTL   TTL of the object inventory cache
 ```
 
 ## Usage
@@ -90,6 +93,19 @@ cluster-domcompmgr,cluster=VSAN-CLUSTER,vcenter=vcenter.example.com,uuid=52b29fa
 host-domclient,cluster=VSAN-CLUSTER,vcenter=vcenter.example.com,hostname=esx01.example.com,uuid=5ae60a2b-fe13-25dd-1f19-005056a3a442 oio=1.0,throughputRead=95.0,latencyAvgWrite=0.0,latencyAvgRead=340.0,iopsRead=0.0,clientCacheHitRate=0.0,throughputWrite=0.0,congestion=0.0,iopsWrite=0.0,clientCacheHits=0.0 1525462200000000000
 host-domclient,cluster=VSAN-CLUSTER,vcenter=vcenter.example.com,hostname=esx03.example.com,uuid=5ae750e2-bc6d-487b-1283-005056a38be2 oio=6.0,throughputRead=40788.0,latencyAvgWrite=11218.0,latencyAvgRead=1000.0,iopsRead=1.0,clientCacheHitRate=0.0,throughputWrite=2819.0,congestion=0.0,iopsWrite=0.0,clientCacheHits=0.0 1525462200000000000
 host-domclient,cluster=VSAN-CLUSTER,vcenter=vcenter.example.com,hostname=esx02.example.com,uuid=5ae7229f-771d-1091-ffe7-005056a35f01 oio=0.0,throughputRead=0.0,latencyAvgWrite=0.0,latencyAvgRead=0.0,iopsRead=0.0,clientCacheHitRate=0.0,throughputWrite=0.0,congestion=0.0,iopsWrite=0.0,clientCacheHits=0.0 1525462200000000000
+```
+
+## Cache
+
+The script will try to maintain an inventory of the vSAN infrastructure in a cache. There are two major benefits:
+
+- Reducing the global execution time of the script for larger environnement
+- Avoid errors when a host is disconnected wilhe the script is executing
+
+By default cache validity duration is 60 minutes. You can choose your own duration with the parameter `--cacheTTL`. Cache files are stored where the script is executed, you can modify this behavior with parameter `--cachefolder`.
+
+```bash
+% ./vsanmetrics.py -s vcenter.example.com -u administrator@vsphere.local -p MyAwesomePassword -c VSAN-CLUSTER --performance --cacheTTL 300 --cachefolder /tmp
 ```
 
 ## List of available entities types

@@ -13,6 +13,8 @@ import getpass
 from datetime import datetime, timedelta
 import time
 import ssl
+import pickle
+import os
 
 import vsanapiutils
 import vsanmgmtObjects
@@ -65,6 +67,19 @@ def get_args():
                         action='store',
                         help='List of entity types to skip. Separated by a comma')
 
+    parser.add_argument('--cachefolder',
+                        default='.',
+                        required=False,
+                        action='store',
+                        help='Folder where the cache files are stored')
+
+    parser.add_argument('--cacheTTL',
+                        type=int,
+                        default=60,
+                        required=False,
+                        action='store',
+                        help='TTL of the object inventory cache')
+
     args = parser.parse_args()
 
     if not args.password:
@@ -83,6 +98,42 @@ def get_args():
     return args
 
 
+def connectvCenter(args, context):
+
+    # Connect to vCenter
+    try:
+        si = SmartConnect(host=args.vcenter,
+                          user=args.user,
+                          pwd=args.password,
+                          port=int(args.port),
+                          sslContext=context)
+        if not si:
+            print("Could not connect to the specified host using specified "
+                  "username and password")
+
+            return -1
+    except vmodl.MethodFault as e:
+        print("Caught vmodl fault : " + e.msg)
+        return -1
+
+    except Exception as e:
+        print("Caught exception : " + str(e))
+        return -1
+
+    # Get content informations
+    content = si.RetrieveContent()
+
+    # Get Info about cluster
+    cluster_obj = getClusterInstance(args.clusterName, content)
+
+    # Exit if the cluster provided in the arguments is not available
+    if not cluster_obj:
+        print 'The required cluster not found in inventory, validate input.'
+        return -1
+
+    return si, content, cluster_obj
+
+
 # Get cluster informations
 def getClusterInstance(clusterName, content):
     searchIndex = content.searchIndex
@@ -94,7 +145,7 @@ def getClusterInstance(clusterName, content):
     return None
 
 
-def getInformations(witnessHosts, cluster):
+def getInformations(witnessHosts, cluster, si):
 
     uuid = {}
     hostnames = {}
@@ -119,28 +170,19 @@ def getInformations(witnessHosts, cluster):
 
     # Get witness disks informations
 
-    return uuid, disks
+    for witnessHost in witnessHosts:
+        host = (vim.HostSystem(witnessHost.host._moId, si._stub))
 
+        uuid[witnessHost.nodeUuid] = host.name
 
-# Get hosts informations (hostname and disks)
-def getHostsInfos(cluster):
-    disksinfos = {}
-    hostnames = {}
-    hostinfos = {}
+        diskWitness = host.configManager.vsanSystem.QueryDisksForVsan()
 
-    for host in cluster.host:
-        hostnames[host.summary.host] = host.summary.config.name
-
-        diskAll = host.configManager.vsanSystem.QueryDisksForVsan()
-
-        for disk in diskAll:
+        for disk in diskWitness:
             if disk.state == 'inUse':
-                disksinfos[disk.vsanUuid] = disk.disk.canonicalName
+                uuid[disk.vsanUuid] = disk.disk.canonicalName
+                disks[disk.vsanUuid] = host.name
 
-    for vsanHostConfig in cluster.configurationEx.vsanHostConfig:
-        hostinfos[vsanHostConfig.clusterInfo.nodeUuid] = hostnames[vsanHostConfig.hostSystem]
-
-    return disksinfos, hostinfos
+    return uuid, disks
 
 
 # Get all VM managed by the hosts in the cluster, return array with name and uuid of the VMs
@@ -432,6 +474,61 @@ def getHealth(args, tagsbase):
         parseHealth(testName, group.groupHealth, tagsbase, timestamp)
 
 
+def isFilesExist(listFile):
+    result = True
+    for file in listFile:
+        if not os.path.isfile(file):
+            result = False
+
+    return result
+
+
+def isTTLOver(listFile, TTL):
+    result = True
+    for file in listFile:
+        if os.path.isfile(file):
+            filemodificationtime = datetime.fromtimestamp(os.stat(file).st_mtime)  # This is a datetime.datetime object!
+            now = datetime.today()
+            max_delay = timedelta(minutes=TTL)
+
+            if now - filemodificationtime < max_delay:
+                result = False
+
+    return result
+
+
+def isHostsConnected(cluster, witnessHosts, si):
+    result = True
+    for host in cluster.host:
+        if not host.summary.runtime.connectionState == 'connected':
+            result = False
+
+    for witnesshost in witnessHosts:
+        host = (vim.HostSystem(witnesshost.host._moId, si._stub))
+        if not host.summary.runtime.connectionState == 'connected':
+            result = False
+
+    return result
+
+
+def pickelDumpObject(object, filename):
+    fileObject = open(filename, 'wb')
+    pickle.dump(object, fileObject)
+    fileObject.close()
+
+
+def pickelLoadObject(filename):
+
+    if os.path.isfile(filename):
+        fileObject = open(filename, 'r')
+        object = pickle.load(fileObject)
+
+        return object
+    else:
+        print("Can't open cache file : " + filename)
+        return -1
+
+
 def getPerformance(args, tagsbase):
 
     result = ""
@@ -439,7 +536,7 @@ def getPerformance(args, tagsbase):
     # Don't check for valid certificate
     context = ssl._create_unverified_context()
 
-    si, content, cluster_obj = connectvCenter(args, context)
+    si, _, cluster_obj = connectvCenter(args, context)
 
     # Disconnect to vcenter at the end
     atexit.register(Disconnect, si)
@@ -450,29 +547,56 @@ def getPerformance(args, tagsbase):
     vsanVcStretchedClusterSystem = vcMos['vsan-stretched-cluster-system']
     vsanPerfSystem = vcMos['vsan-performance-manager']
 
-    # Get VM uuid/names
-    vms = getVMs(cluster_obj)
-
-    # Get uuid/names relationship informations for hosts and disks
-    uuid, disks = getInformations(content, cluster_obj)
-
     # Witness
     # Retrieve Witness Host for given VSAN Cluster
     witnessHosts = vsanVcStretchedClusterSystem.VSANVcGetWitnessHosts(
         cluster=cluster_obj
     )
 
-    for witnessHost in witnessHosts:
-        host = (vim.HostSystem(witnessHost.host._moId, si._stub))
+    # Build cache's file names
+    uuidfilename = os.path.join(args.cachefolder, 'vsanmetrics_uuid-' + args.clusterName + '.cache')
+    disksfilename = os.path.join(args.cachefolder, 'vsanmetrics_disks-' + args.clusterName + '.cache')
+    vmsfilename = os.path.join(args.cachefolder, 'vsanmetrics_vms-' + args.clusterName + '.cache')
 
-        uuid[witnessHost.nodeUuid] = host.name
+    listFile = (uuidfilename, disksfilename, vmsfilename)
 
-        diskWitness = host.configManager.vsanSystem.QueryDisksForVsan()
+    # By default, don't rebuild cache
+    rebuildcache = False
 
-        for disk in diskWitness:
-            if disk.state == 'inUse':
-                uuid[disk.vsanUuid] = disk.disk.canonicalName
-                disks[disk.vsanUuid] = host.name
+    # Test if all needed cache files exists, if all hosts are connected and if TTL of the cache is not over
+    resultFilesExist = isFilesExist(listFile)
+    resultHostConnected = isHostsConnected(cluster_obj, witnessHosts, si)
+    resultTTLOver = isTTLOver(listFile, args.cacheTTL)
+
+    # Make decision if rebuilding cache is needed
+    if not resultFilesExist and not resultHostConnected:
+        print("One or more host disconnected. Can't continue")
+        return -1
+    else:
+        if not resultFilesExist and resultHostConnected:
+            rebuildcache = True
+        elif resultFilesExist and resultHostConnected and not resultTTLOver:
+            rebuildcache = False
+        elif resultFilesExist and resultHostConnected and resultTTLOver:
+            rebuildcache = True
+
+    if rebuildcache:
+        # Rebuild cache
+        # Get uuid/names relationship informations for hosts and disks
+        uuid, disks = getInformations(witnessHosts, cluster_obj, si)
+
+        # Get VM uuid/names
+        vms = getVMs(cluster_obj)
+
+        pickelDumpObject(uuid, uuidfilename)
+        pickelDumpObject(disks, disksfilename)
+        pickelDumpObject(vms, vmsfilename)
+
+    else:
+        # Load data from cache
+        uuid = pickelLoadObject(uuidfilename)
+        disks = pickelLoadObject(disksfilename)
+        vms = pickelLoadObject(vmsfilename)
 
     # Gather a list of the available entity types (ex: vsan-host-net)
     entityTypes = vsanPerfSystem.VsanPerfGetSupportedEntityTypes()
@@ -569,42 +693,6 @@ def getPerformance(args, tagsbase):
                     result = result + formatInfluxLineProtocol(measurement, tags, fields, timestamp)
 
     print(result)
-
-
-def connectvCenter(args, context):
-
-    # Connect to vCenter
-    try:
-        si = SmartConnect(host=args.vcenter,
-                          user=args.user,
-                          pwd=args.password,
-                          port=int(args.port),
-                          sslContext=context)
-        if not si:
-            print("Could not connect to the specified host using specified "
-                  "username and password")
-
-            return -1
-    except vmodl.MethodFault as e:
-        print("Caught vmodl fault : " + e.msg)
-        return -1
-
-    except Exception as e:
-        print("Caught exception : " + str(e))
-        return -1
-
-    # Get content informations
-    content = si.RetrieveContent()
-
-    # Get Info about cluster
-    cluster_obj = getClusterInstance(args.clusterName, content)
-
-    # Exit if the cluster provided in the arguments is not available
-    if not cluster_obj:
-        print 'The required cluster not found in inventory, validate input.'
-        return -1
-
-    return si, content, cluster_obj
 
 
 # Main...
