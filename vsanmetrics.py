@@ -128,7 +128,7 @@ def connectvCenter(args, context):
 
     # Exit if the cluster provided in the arguments is not available
     if not cluster_obj:
-        print 'The required cluster not found in inventory, validate input.'
+        print('The required cluster not found in inventory, validate input.')
         return -1
 
     return si, content, cluster_obj
@@ -138,8 +138,10 @@ def connectvCenter(args, context):
 def getClusterInstance(clusterName, content):
     searchIndex = content.searchIndex
     datacenters = content.rootFolder.childEntity
+    
     for datacenter in datacenters:
         cluster = searchIndex.FindChild(datacenter.hostFolder, clusterName)
+
         if cluster is not None:
             return cluster
     return None
@@ -260,6 +262,7 @@ def parseEntityRefId(measurement, entityRefId, uuid, vms, disks):
 
         if measurement == 'disk-group':
             tags['uuid'] = entityRefId[1]
+            tags['hostname'] = disks[entityRefId[1]]
 
         if measurement == 'virtual-machine':
             tags['uuid'] = entityRefId[1]
@@ -296,12 +299,13 @@ def parseEntityRefId(measurement, entityRefId, uuid, vms, disks):
             tags['hostname'] = uuid[entityRefId[1]]
 
         if measurement == 'vsan-iscsi-target':
-            tags['uuid'] = entityRefId[1]
-            tags['hostname'] = uuid[entityRefId[1]]
+            tags['target'] = entityRefId[1]
 
         if measurement == 'vsan-iscsi-lun':
-            tags['uuid'] = entityRefId[1]
-            tags['hostname'] = uuid[entityRefId[1]]
+            split = entityRefId[1].split("|")
+            
+            tags['target'] = split[0]
+            tags['lunid'] = split[1]
 
     return tags
 
@@ -520,7 +524,7 @@ def pickelDumpObject(object, filename):
 def pickelLoadObject(filename):
 
     if os.path.isfile(filename):
-        fileObject = open(filename, 'r')
+        fileObject = open(filename, 'rb')
         object = pickle.load(fileObject)
 
         return object
