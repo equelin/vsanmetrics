@@ -98,8 +98,11 @@ def get_args():
     return args
 
 
-def connectvCenter(args, context):
+def connectvCenter(args):
 
+    # Don't check for valid certificate
+    context = ssl._create_unverified_context()
+    
     # Connect to vCenter
     try:
         si = SmartConnect(host=args.vcenter,
@@ -108,17 +111,13 @@ def connectvCenter(args, context):
                           port=int(args.port),
                           sslContext=context)
         if not si:
-            print("Could not connect to the specified host using specified "
-                  "username and password")
+            raise Exception("Could not connect to the specified host using specified username and password")
 
-            return -1
     except vmodl.MethodFault as e:
-        print("Caught vmodl fault : " + e.msg)
-        return -1
+        raise Exception("Caught vmodl fault : " + e.msg)
 
     except Exception as e:
-        print("Caught exception : " + str(e))
-        return -1
+        raise Exception("Caught exception : " + str(e))
 
     # Get content informations
     content = si.RetrieveContent()
@@ -128,22 +127,53 @@ def connectvCenter(args, context):
 
     # Exit if the cluster provided in the arguments is not available
     if not cluster_obj:
-        print('The required cluster not found in inventory, validate input.')
-        return -1
+        raise Exception('Inventory exception: Did not find the required cluster')
 
-    return si, content, cluster_obj
+    # Disconnect to vcenter at the end
+    atexit.register(Disconnect, si)
+
+    apiVersion = vsanapiutils.GetLatestVmodlVersion(args.vcenter)
+    vcMos = vsanapiutils.GetVsanVcMos(si._stub, context=context, version=apiVersion)
+    
+    vsanClusterConfigSystem = vcMos['vsan-cluster-config-system']
+
+    try:
+        clusterConfig = vsanClusterConfigSystem.VsanClusterGetConfig(
+            cluster=cluster_obj
+        )
+    except vmodl.fault.InvalidState as e:
+        raise Exception("InvalidState exception: " + e.msg())
+        
+    except vmodl.fault.RuntimeFault as e:
+        raise Exception("RuntimeFault exception: " + e.msg())
+
+    if not clusterConfig.enabled:
+        raise Exception("Configuration exeption: vSAN is not enabled on cluster " + args.clusterName)
+
+    return si, content, cluster_obj, vcMos
 
 
 # Get cluster informations
 def getClusterInstance(clusterName, content):
-    searchIndex = content.searchIndex
-    datacenters = content.rootFolder.childEntity
-    
-    for datacenter in datacenters:
-        cluster = searchIndex.FindChild(datacenter.hostFolder, clusterName)
+    container = content.rootFolder
+    viewType = [vim.ClusterComputeResource]
+    recursive = True
+    containerView = content.viewManager.CreateContainerView(container, viewType, recursive)
+    clusters = containerView.view
 
-        if cluster is not None:
-            return cluster
+    nbClusterWithSameName = 0
+
+    for cluster in clusters:
+        if cluster.name == clusterName:
+            nbClusterWithSameName += 1
+            cluster_obj = cluster
+
+    if nbClusterWithSameName == 1:
+        return cluster_obj
+
+    if nbClusterWithSameName > 1:
+        raise Exception("There is more than one cluster with the name " + clusterName)
+        
     return None
 
 
@@ -402,16 +432,11 @@ def parseHealth(test, value, tagsbase, timestamp):
 
 def getCapacity(args, tagsbase):
 
-    # Don't check for valid certificate
-    context = ssl._create_unverified_context()
-
-    si, _, cluster_obj = connectvCenter(args, context)
-
-    # Disconnect to vcenter at the end
-    atexit.register(Disconnect, si)
-
-    apiVersion = vsanapiutils.GetLatestVmodlVersion(args.vcenter)
-    vcMos = vsanapiutils.GetVsanVcMos(si._stub, context=context, version=apiVersion)
+    try:
+        si, _, cluster_obj, vcMos = connectvCenter(args)
+    except Exception as e:
+        print("CAPACITY - Caught exception: " + str(e)) 
+        return
 
     vsanSpaceReportSystem = vcMos['vsan-cluster-space-report-system']
 
@@ -421,14 +446,14 @@ def getCapacity(args, tagsbase):
         )
     except vmodl.fault.InvalidArgument as e:
         print("Caught InvalidArgument exception : " + str(e))
-        return -1
+        return
     except vmodl.fault.NotSupported as e:
         print("Caught NotSupported exception : " + str(e))
-        return -1
+        return
 
     except vmodl.fault.RuntimeFault as e:
         print("Caught RuntimeFault exception : " + str(e))
-        return -1
+        return
 
     timestamp = int(time.time() * 1000000000)
 
@@ -444,16 +469,11 @@ def getCapacity(args, tagsbase):
 
 def getHealth(args, tagsbase):
 
-    # Don't check for valid certificate
-    context = ssl._create_unverified_context()
-
-    si, _, cluster_obj = connectvCenter(args, context)
-
-    # Disconnect to vcenter at the end
-    atexit.register(Disconnect, si)
-
-    apiVersion = vsanapiutils.GetLatestVmodlVersion(args.vcenter)
-    vcMos = vsanapiutils.GetVsanVcMos(si._stub, context=context, version=apiVersion)
+    try:
+        si, _, cluster_obj, vcMos = connectvCenter(args)
+    except Exception as e:
+        print("HEALTH - Caught exception: " + str(e)) 
+        return
 
     vsanClusterHealthSystem = vcMos['vsan-cluster-health-system']
 
@@ -463,10 +483,10 @@ def getHealth(args, tagsbase):
         )
     except vmodl.fault.NotFound as e:
         print("Caught NotFound exception : " + str(e))
-        return -1
+        return
     except vmodl.fault.RuntimeFault as e:
         print("Caught RuntimeFault exception : " + str(e))
-        return -1
+        return
 
     timestamp = int(time.time() * 1000000000)
 
@@ -535,18 +555,11 @@ def pickelLoadObject(filename):
 
 def getPerformance(args, tagsbase):
 
-    result = ""
-
-    # Don't check for valid certificate
-    context = ssl._create_unverified_context()
-
-    si, _, cluster_obj = connectvCenter(args, context)
-
-    # Disconnect to vcenter at the end
-    atexit.register(Disconnect, si)
-
-    apiVersion = vsanapiutils.GetLatestVmodlVersion(args.vcenter)
-    vcMos = vsanapiutils.GetVsanVcMos(si._stub, context=context, version=apiVersion)
+    try:
+        si, _, cluster_obj, vcMos = connectvCenter(args)
+    except Exception as e:
+        print("PERFORMANCE - Caught exception: " + str(e)) 
+        return
 
     vsanVcStretchedClusterSystem = vcMos['vsan-stretched-cluster-system']
     vsanPerfSystem = vcMos['vsan-performance-manager']
@@ -575,7 +588,7 @@ def getPerformance(args, tagsbase):
     # Make decision if rebuilding cache is needed
     if not resultFilesExist and not resultHostConnected:
         print("One or more host disconnected. Can't continue")
-        return -1
+        return
     else:
         if not resultFilesExist and resultHostConnected:
             rebuildcache = True
@@ -614,6 +627,8 @@ def getPerformance(args, tagsbase):
     if args.skipentitytypes:
             splitSkipentitytypes = args.skipentitytypes.split(',')
 
+    result = ""
+
     for entities in entityTypes:
 
         if entities.name not in splitSkipentitytypes:
@@ -649,27 +664,27 @@ def getPerformance(args, tagsbase):
 
             except vmodl.fault.InvalidArgument as e:
                 print("Caught InvalidArgument exception : " + str(e))
-                return -1
+                return
 
             except vmodl.fault.NotFound as e:
                 print("Caught NotFound exception : " + str(e))
-                return -1
+                return
 
             except vmodl.fault.NotSupported as e:
                 print("Caught NotSupported exception : " + str(e))
-                return -1
+                return
 
             except vmodl.fault.RuntimeFault as e:
                 print("Caught RuntimeFault exception : " + str(e))
-                return -1
+                return
 
             except vmodl.fault.Timedout as e:
                 print("Caught Timedout exception : " + str(e))
-                return -1
+                return
 
             except vmodl.fault.VsanNodeNotMaster as e:
                 print("Caught VsanNodeNotMaster exception : " + str(e))
-                return -1
+                return
 
             for metric in metrics:
 
