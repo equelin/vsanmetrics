@@ -5,7 +5,7 @@
 from pyVim.connect import SmartConnect, Disconnect
 from pyVmomi import VmomiSupport, SoapStubAdapter, vim, vmodl
 
-from multiprocessing import Process
+import threading
 
 import argparse
 import atexit
@@ -430,13 +430,7 @@ def parseHealth(test, value, tagsbase, timestamp):
     printInfluxLineProtocol(measurement, tags, fields, timestamp)
 
 
-def getCapacity(args, tagsbase):
-
-    try:
-        si, _, cluster_obj, vcMos = connectvCenter(args)
-    except Exception as e:
-        print("CAPACITY - Caught exception: " + str(e)) 
-        return
+def getCapacity(args, tagsbase, cluster_obj, vcMos, uuid, disks, vms):
 
     vsanSpaceReportSystem = vcMos['vsan-cluster-space-report-system']
 
@@ -465,15 +459,40 @@ def getCapacity(args, tagsbase):
 
     for object in spaceReport.spaceDetail.spaceUsageByObjectType:
         parseCapacity(object.objType, object, tagsbase, timestamp)
-
-
-def getHealth(args, tagsbase):
+    
+    # Get informations about VsanClusterBalancePerDiskInfo
+    vsanClusterHealthSystem = vcMos['vsan-cluster-health-system']
 
     try:
-        si, _, cluster_obj, vcMos = connectvCenter(args)
-    except Exception as e:
-        print("HEALTH - Caught exception: " + str(e)) 
+        clusterHealth = vsanClusterHealthSystem.VsanQueryVcClusterHealthSummary(
+            cluster=cluster_obj
+        )
+    except vmodl.fault.NotFound as e:
+        print("Caught NotFound exception : " + str(e))
         return
+    except vmodl.fault.RuntimeFault as e:
+        print("Caught RuntimeFault exception : " + str(e))
+        return
+
+    for disk in clusterHealth.diskBalance.disks:
+        measurement = 'capacity_diskBalance'
+
+        tags = tagsbase
+        tags['uuid'] = disk.uuid
+        tags['hostname'] = disks[disk.uuid]
+
+        fields = {}
+
+        fields['varianceThreshold'] = clusterHealth.diskBalance.varianceThreshold
+        fields['fullness'] = disk.fullness
+        fields['variance'] = disk.variance
+        fields['fullnessAboveThreshold'] = disk.fullnessAboveThreshold
+        fields['dataToMoveB'] = disk.dataToMoveB
+
+        printInfluxLineProtocol(measurement, tags, fields, timestamp)
+
+
+def getHealth(args, tagsbase, cluster_obj, vcMos,):
 
     vsanClusterHealthSystem = vcMos['vsan-cluster-health-system']
 
@@ -553,16 +572,11 @@ def pickelLoadObject(filename):
         return -1
 
 
-def getPerformance(args, tagsbase):
-
-    try:
-        si, _, cluster_obj, vcMos = connectvCenter(args)
-    except Exception as e:
-        print("PERFORMANCE - Caught exception: " + str(e)) 
-        return
+# Gather informations about uuid, disks and hostnames
+# Store them in cache files if needed
+def manageData(args, si, cluster_obj, vcMos):
 
     vsanVcStretchedClusterSystem = vcMos['vsan-stretched-cluster-system']
-    vsanPerfSystem = vcMos['vsan-performance-manager']
 
     # Witness
     # Retrieve Witness Host for given VSAN Cluster
@@ -614,6 +628,13 @@ def getPerformance(args, tagsbase):
         uuid = pickelLoadObject(uuidfilename)
         disks = pickelLoadObject(disksfilename)
         vms = pickelLoadObject(vmsfilename)
+
+    return uuid, disks, vms
+
+
+def getPerformance(args, tagsbase, si, cluster_obj, vcMos, uuid, disks, vms):
+
+    vsanPerfSystem = vcMos['vsan-performance-manager']
 
     # Gather a list of the available entity types (ex: vsan-host-net)
     entityTypes = vsanPerfSystem.VsanPerfGetSupportedEntityTypes()
@@ -725,20 +746,40 @@ def main():
     tagsbase['vcenter'] = args.vcenter
     tagsbase['cluster'] = args.clusterName
 
+    try:
+        si, _, cluster_obj, vcMos = connectvCenter(args)
+    except Exception as e:
+        print("MAIN - Caught exception: " + str(e)) 
+        return
+
+    uuid, disks, vms = manageData(args, si, cluster_obj, vcMos)
+
+    threads = list()
+
     # CAPACITY
     if args.capacity:
-        Process(target=getCapacity, args=(args, tagsbase,)).start()
+        x = threading.Thread(target=getCapacity, args=(args, tagsbase, cluster_obj, vcMos, uuid, disks, vms))
+        threads.append(x)
+        x.start()
 
     # HEALTH
     if args.health:
-        Process(target=getHealth, args=(args, tagsbase,)).start()
+        x = threading.Thread(target=getHealth, args=(args, tagsbase, cluster_obj, vcMos,))
+        threads.append(x)
+        x.start()
 
     # PERFORMANCE
     if args.performance:
-        Process(target=getPerformance, args=(args, tagsbase,)).start()
+        x = threading.Thread(target=getPerformance, args=(args, tagsbase, si, cluster_obj, vcMos, uuid, disks, vms,))
+        threads.append(x)
+        x.start()
+
+    for _, thread in enumerate(threads):
+        thread.join()
 
     return 0
 
 # Start program
 if __name__ == "__main__":
     main()
+
