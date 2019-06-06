@@ -195,7 +195,7 @@ def getVMs(cluster):
         for vm in host.vm:  # Iterate through each VM on the host
             vmname = vm.summary.config.name
             # Check for white space in VM's name, and replace with escape characters
-            vmname = vmname.replace(" ","\ ")
+            vmname = "\ ".join(vmname.split())
             vms[vm.summary.config.instanceUuid] = vmname
     return vms
 
