@@ -1,1 +1,1 @@
-pyvmomi
+pyvmomi pyvim
