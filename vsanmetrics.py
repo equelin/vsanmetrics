@@ -2,7 +2,7 @@
 
 # Erwan Quelin - erwan.quelin@gmail.com
 
-from pyVim.connect import SmartConnect, Disconnect
+from pyvim.connect import SmartConnect, Disconnect
 from pyVmomi import VmomiSupport, SoapStubAdapter, vim, vmodl
 
 import threading
@@ -18,7 +18,7 @@ import os
 
 import vsanapiutils
 import vsanmgmtObjects
-
+import calendar
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -246,7 +246,7 @@ def formatInfluxLineProtocol(measurement, tags, fields, timestamp):
 
 # Convert time in string format to epoch timestamp (nanosecond)
 def convertStrToTimestamp(str):
-    sec = time.mktime(datetime.strptime(str, "%Y-%m-%d %H:%M:%S").timetuple())
+    sec = calendar.timegm(datetime.strptime(str, "%Y-%m-%d %H:%M:%S").timetuple())
 
     ns = int(sec * 1000000000)
 
